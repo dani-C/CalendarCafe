@@ -1,0 +1,33 @@
+/**
+ * Responsive Breakpoints
+ * Mobile-first approach with standard breakpoints
+ */
+
+:root {
+  /* Breakpoint values */
+  --breakpoint-sm: 640px;
+  --breakpoint-md: 768px;
+  --breakpoint-lg: 1024px;
+  --breakpoint-xl: 1280px;
+  --breakpoint-2xl: 1536px;
+}
+
+/**
+ * Usage in component styles:
+ *
+ * .myComponent {
+ *   width: 100%;
+ * }
+ *
+ * @media (min-width: 640px) {
+ *   .myComponent {
+ *     width: 50%;
+ *   }
+ * }
+ *
+ * @media (min-width: 1024px) {
+ *   .myComponent {
+ *     width: 33.333%;
+ *   }
+ * }
+ */
