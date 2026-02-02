@@ -1,0 +1,911 @@
+// This is your Prisma schema file for CalendarCafe
+// Scheduling automation platform schema
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../node_modules/.prisma/client"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ============================================================================
+// CORE ENTITIES - Authentication & Organization
+// ============================================================================
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+}
+
+enum UserRole {
+  OWNER
+  ADMIN
+  MEMBER
+  VIEWER
+}
+
+model User {
+  id       String     @id @default(uuid()) @db.Uuid
+  email    String     @unique @db.VarChar(255)
+  name     String     @db.VarChar(255)
+  avatar   String?    @db.Text
+  timezone String     @default("UTC") @db.VarChar(100)
+  locale   String     @default("en") @db.VarChar(10)
+  status   UserStatus @default(ACTIVE)
+
+  // Auth
+  passwordHash  String? @db.VarChar(255)
+  emailVerified Boolean @default(false)
+
+  // Timestamps
+  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt   DateTime? @db.Timestamptz(3)
+  lastLoginAt DateTime? @db.Timestamptz(3)
+
+  // Relations
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  teamMemberships       TeamMember[]
+  calendarConnections   CalendarConnection[]
+  availabilitySchedules AvailabilitySchedule[]
+  eventTypes            EventType[]
+  bookingsAsHost        Booking[]              @relation("HostBookings")
+  workflows             Workflow[]
+  auditLogs             AuditLog[]
+  roundRobinAssignments RoundRobinAssignment[]
+
+  @@index([organizationId])
+  @@index([email])
+  @@index([status])
+  @@index([deletedAt])
+  @@map("users")
+}
+
+model Organization {
+  id      String  @id @default(uuid()) @db.Uuid
+  name    String  @db.VarChar(255)
+  slug    String  @unique @db.VarChar(100)
+  domain  String? @db.VarChar(255)
+  logoUrl String? @db.Text
+
+  // Settings
+  timezone   String  @default("UTC") @db.VarChar(100)
+  brandColor String? @db.VarChar(7)
+
+  // Enterprise features
+  ssoEnabled  Boolean @default(false)
+  scimEnabled Boolean @default(false)
+
+  // Timestamps
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  // Relations
+  users                User[]
+  teams                Team[]
+  webhookSubscriptions WebhookSubscription[]
+  retentionPolicies    RetentionPolicy[]
+  auditLogs            AuditLog[]
+
+  @@index([slug])
+  @@index([deletedAt])
+  @@map("organizations")
+}
+
+model Team {
+  id          String  @id @default(uuid()) @db.Uuid
+  name        String  @db.VarChar(255)
+  description String? @db.Text
+
+  // Timestamps
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  // Relations
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  members         TeamMember[]
+  eventTypes      EventType[]
+  roundRobinPools RoundRobinPool[]
+
+  @@index([organizationId])
+  @@index([deletedAt])
+  @@map("teams")
+}
+
+model TeamMember {
+  id   String   @id @default(uuid()) @db.Uuid
+  role UserRole @default(MEMBER)
+
+  // Timestamps
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  // Relations
+  userId String @db.Uuid
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  teamId String @db.Uuid
+  team   Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, teamId])
+  @@index([userId])
+  @@index([teamId])
+  @@map("team_members")
+}
+
+// ============================================================================
+// CALENDAR & AVAILABILITY
+// ============================================================================
+
+enum CalendarProvider {
+  GOOGLE
+  MICROSOFT
+  APPLE
+  CUSTOM
+}
+
+model CalendarConnection {
+  id                String           @id @default(uuid()) @db.Uuid
+  provider          CalendarProvider
+  providerAccountId String           @db.VarChar(255)
+
+  // OAuth tokens (encrypted in production)
+  accessToken  String    @db.Text
+  refreshToken String?   @db.Text
+  expiresAt    DateTime? @db.Timestamptz(3)
+
+  // Calendar details
+  calendarId   String  @db.VarChar(255)
+  calendarName String  @db.VarChar(255)
+  isPrimary    Boolean @default(false)
+
+  // Sync state
+  lastSyncAt DateTime? @db.Timestamptz(3)
+  syncToken  String?   @db.Text
+
+  // Timestamps
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  // Relations
+  userId String @db.Uuid
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, provider, providerAccountId])
+  @@index([userId])
+  @@index([provider])
+  @@index([deletedAt])
+  @@map("calendar_connections")
+}
+
+model AvailabilitySchedule {
+  id        String  @id @default(uuid()) @db.Uuid
+  name      String  @db.VarChar(255)
+  timezone  String  @db.VarChar(100)
+  isDefault Boolean @default(false)
+
+  // Timestamps
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  // Relations
+  userId String @db.Uuid
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  slots      AvailabilitySlot[]
+  overrides  AvailabilityOverride[]
+  eventTypes EventType[]
+
+  @@index([userId])
+  @@index([isDefault])
+  @@index([deletedAt])
+  @@map("availability_schedules")
+}
+
+enum DayOfWeek {
+  MONDAY
+  TUESDAY
+  WEDNESDAY
+  THURSDAY
+  FRIDAY
+  SATURDAY
+  SUNDAY
+}
+
+model AvailabilitySlot {
+  id        String    @id @default(uuid()) @db.Uuid
+  dayOfWeek DayOfWeek
+  startTime String    @db.VarChar(5) // HH:MM format
+  endTime   String    @db.VarChar(5) // HH:MM format
+
+  // Timestamps
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  // Relations
+  scheduleId String               @db.Uuid
+  schedule   AvailabilitySchedule @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+
+  @@index([scheduleId])
+  @@index([dayOfWeek])
+  @@map("availability_slots")
+}
+
+enum OverrideType {
+  UNAVAILABLE
+  AVAILABLE
+}
+
+model AvailabilityOverride {
+  id        String       @id @default(uuid()) @db.Uuid
+  type      OverrideType
+  date      DateTime     @db.Date
+  startTime String?      @db.VarChar(5) // For AVAILABLE type
+  endTime   String?      @db.VarChar(5) // For AVAILABLE type
+  reason    String?      @db.Text
+
+  // Timestamps
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  // Relations
+  scheduleId String               @db.Uuid
+  schedule   AvailabilitySchedule @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+
+  @@index([scheduleId])
+  @@index([date])
+  @@map("availability_overrides")
+}
+
+// ============================================================================
+// EVENT TYPES & BOOKINGS
+// ============================================================================
+
+enum EventTypeKind {
+  ONE_ON_ONE
+  GROUP
+  COLLECTIVE
+  ROUND_ROBIN
+}
+
+enum LocationType {
+  PHONE
+  IN_PERSON
+  ZOOM
+  GOOGLE_MEET
+  MICROSOFT_TEAMS
+  CUSTOM
+}
+
+model EventType {
+  id          String        @id @default(uuid()) @db.Uuid
+  name        String        @db.VarChar(255)
+  slug        String        @db.VarChar(100)
+  description String?       @db.Text
+  kind        EventTypeKind @default(ONE_ON_ONE)
+
+  // Scheduling settings
+  duration           Int // in minutes
+  bufferBefore       Int  @default(0) // in minutes
+  bufferAfter        Int  @default(0) // in minutes
+  minNotice          Int  @default(0) // in minutes
+  maxBookingsPerDay  Int?
+  maxBookingsPerWeek Int?
+
+  // Location
+  locationType  LocationType
+  locationValue String?      @db.Text
+
+  // Group settings
+  capacity    Int? // for GROUP type
+  minCapacity Int? // for GROUP type
+
+  // Branding
+  color String? @db.VarChar(7)
+
+  // Status
+  isActive Boolean @default(true)
+
+  // Timestamps
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  // Relations
+  userId String @db.Uuid
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  teamId String? @db.Uuid
+  team   Team?   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  scheduleId String?               @db.Uuid
+  schedule   AvailabilitySchedule? @relation(fields: [scheduleId], references: [id], onDelete: SetNull)
+
+  roundRobinPoolId String?         @db.Uuid
+  roundRobinPool   RoundRobinPool? @relation(fields: [roundRobinPoolId], references: [id], onDelete: SetNull)
+
+  bookings     Booking[]
+  questions    Question[]
+  workflows    Workflow[]
+  routingRules RoutingRule[]
+
+  @@unique([userId, slug])
+  @@index([userId])
+  @@index([teamId])
+  @@index([slug])
+  @@index([isActive])
+  @@index([kind])
+  @@index([deletedAt])
+  @@map("event_types")
+}
+
+enum BookingStatus {
+  PENDING
+  CONFIRMED
+  RESCHEDULED
+  CANCELED
+  NO_SHOW
+  COMPLETED
+}
+
+model Booking {
+  id     String        @id @default(uuid()) @db.Uuid
+  status BookingStatus @default(CONFIRMED)
+
+  // Scheduling
+  startTime DateTime @db.Timestamptz(3)
+  endTime   DateTime @db.Timestamptz(3)
+  timezone  String   @db.VarChar(100)
+
+  // Location (final resolved location)
+  location String @db.Text
+
+  // Cancellation
+  canceledAt   DateTime? @db.Timestamptz(3)
+  cancelReason String?   @db.Text
+  canceledBy   String?   @db.VarChar(50) // "host" or "invitee"
+
+  // No-show tracking
+  noShowMarkedAt DateTime? @db.Timestamptz(3)
+
+  // External calendar event ID
+  calendarEventId String? @db.VarChar(255)
+
+  // Timestamps
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  // Relations
+  eventTypeId String    @db.Uuid
+  eventType   EventType @relation(fields: [eventTypeId], references: [id], onDelete: Restrict)
+
+  hostId String @db.Uuid
+  host   User   @relation("HostBookings", fields: [hostId], references: [id], onDelete: Restrict)
+
+  inviteeId String  @db.Uuid
+  invitee   Invitee @relation(fields: [inviteeId], references: [id], onDelete: Restrict)
+
+  answers           Answer[]
+  notificationLogs  NotificationLog[]
+  webhookDeliveries WebhookDelivery[]
+
+  @@index([eventTypeId])
+  @@index([hostId])
+  @@index([inviteeId])
+  @@index([status])
+  @@index([startTime])
+  @@index([createdAt])
+  @@map("bookings")
+}
+
+model Invitee {
+  id       String  @id @default(uuid()) @db.Uuid
+  email    String  @db.VarChar(255)
+  name     String  @db.VarChar(255)
+  phone    String? @db.VarChar(50)
+  timezone String  @db.VarChar(100)
+  notes    String? @db.Text
+
+  // Tracking
+  utmSource   String? @db.VarChar(255)
+  utmMedium   String? @db.VarChar(255)
+  utmCampaign String? @db.VarChar(255)
+  referrer    String? @db.Text
+
+  // Timestamps
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  bookings Booking[]
+
+  @@index([email])
+  @@index([createdAt])
+  @@map("invitees")
+}
+
+// ============================================================================
+// QUESTIONS & ANSWERS
+// ============================================================================
+
+enum QuestionType {
+  SHORT_TEXT
+  LONG_TEXT
+  SINGLE_SELECT
+  MULTI_SELECT
+  PHONE
+  EMAIL
+  NUMBER
+}
+
+model Question {
+  id          String       @id @default(uuid()) @db.Uuid
+  label       String       @db.VarChar(500)
+  type        QuestionType
+  required    Boolean      @default(false)
+  placeholder String?      @db.VarChar(255)
+  options     String[] // For SELECT types
+  position    Int
+
+  // Timestamps
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  // Relations
+  eventTypeId String?    @db.Uuid
+  eventType   EventType? @relation(fields: [eventTypeId], references: [id], onDelete: Cascade)
+
+  routingFormId String?      @db.Uuid
+  routingForm   RoutingForm? @relation(fields: [routingFormId], references: [id], onDelete: Cascade)
+
+  answers Answer[]
+
+  @@index([eventTypeId])
+  @@index([routingFormId])
+  @@index([position])
+  @@map("questions")
+}
+
+model Answer {
+  id    String @id @default(uuid()) @db.Uuid
+  value String @db.Text
+
+  // Timestamps
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  // Relations
+  questionId String   @db.Uuid
+  question   Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  bookingId String?  @db.Uuid
+  booking   Booking? @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  routingSubmissionId String?            @db.Uuid
+  routingSubmission   RoutingSubmission? @relation(fields: [routingSubmissionId], references: [id], onDelete: Cascade)
+
+  @@index([questionId])
+  @@index([bookingId])
+  @@index([routingSubmissionId])
+  @@map("answers")
+}
+
+// ============================================================================
+// ROUTING & ASSIGNMENT
+// ============================================================================
+
+model RoutingForm {
+  id          String  @id @default(uuid()) @db.Uuid
+  name        String  @db.VarChar(255)
+  description String? @db.Text
+
+  // Timestamps
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  questions   Question[]
+  rules       RoutingRule[]
+  submissions RoutingSubmission[]
+
+  @@index([deletedAt])
+  @@map("routing_forms")
+}
+
+enum RoutingOperator {
+  EQUALS
+  NOT_EQUALS
+  CONTAINS
+  GREATER_THAN
+  LESS_THAN
+  IN
+}
+
+model RoutingRule {
+  id       String @id @default(uuid()) @db.Uuid
+  position Int
+
+  // Condition
+  questionLabel String          @db.VarChar(500)
+  operator      RoutingOperator
+  value         String          @db.Text
+
+  // Timestamps
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  // Relations
+  routingFormId String      @db.Uuid
+  routingForm   RoutingForm @relation(fields: [routingFormId], references: [id], onDelete: Cascade)
+
+  eventTypeId String    @db.Uuid
+  eventType   EventType @relation(fields: [eventTypeId], references: [id], onDelete: Cascade)
+
+  @@index([routingFormId])
+  @@index([eventTypeId])
+  @@index([position])
+  @@map("routing_rules")
+}
+
+model RoutingSubmission {
+  id String @id @default(uuid()) @db.Uuid
+
+  // Result
+  matchedEventTypeId String? @db.Uuid
+
+  // Timestamps
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  // Relations
+  routingFormId String      @db.Uuid
+  routingForm   RoutingForm @relation(fields: [routingFormId], references: [id], onDelete: Cascade)
+
+  answers Answer[]
+
+  @@index([routingFormId])
+  @@index([matchedEventTypeId])
+  @@index([createdAt])
+  @@map("routing_submissions")
+}
+
+enum AssignmentStrategy {
+  ROTATE
+  WEIGHTED
+  LEAST_RECENT
+  PRIORITY
+}
+
+model RoundRobinPool {
+  id       String             @id @default(uuid()) @db.Uuid
+  name     String             @db.VarChar(255)
+  strategy AssignmentStrategy @default(ROTATE)
+
+  // Timestamps
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  // Relations
+  teamId String @db.Uuid
+  team   Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  eventTypes  EventType[]
+  assignments RoundRobinAssignment[]
+
+  @@index([teamId])
+  @@index([deletedAt])
+  @@map("round_robin_pools")
+}
+
+model RoundRobinAssignment {
+  id       String @id @default(uuid()) @db.Uuid
+  weight   Int    @default(1)
+  priority Int    @default(0)
+
+  // State tracking
+  lastAssignedAt  DateTime? @db.Timestamptz(3)
+  assignmentCount Int       @default(0)
+
+  // Timestamps
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  // Relations
+  poolId String         @db.Uuid
+  pool   RoundRobinPool @relation(fields: [poolId], references: [id], onDelete: Cascade)
+
+  userId String @db.Uuid
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([poolId, userId])
+  @@index([poolId])
+  @@index([userId])
+  @@map("round_robin_assignments")
+}
+
+// ============================================================================
+// WORKFLOWS & NOTIFICATIONS
+// ============================================================================
+
+enum WorkflowTrigger {
+  BOOKING_CREATED
+  BOOKING_RESCHEDULED
+  BOOKING_CANCELED
+  BEFORE_MEETING
+  AFTER_MEETING
+}
+
+enum WorkflowChannel {
+  EMAIL
+  SMS
+  WEBHOOK
+}
+
+model Workflow {
+  id      String          @id @default(uuid()) @db.Uuid
+  name    String          @db.VarChar(255)
+  trigger WorkflowTrigger
+  channel WorkflowChannel
+
+  // Timing (for BEFORE_MEETING trigger)
+  minutesBefore Int?
+
+  // Template
+  subject String? @db.VarChar(500)
+  body    String  @db.Text
+
+  // Status
+  isActive Boolean @default(true)
+
+  // Timestamps
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  // Relations
+  userId String @db.Uuid
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  eventTypeId String?    @db.Uuid
+  eventType   EventType? @relation(fields: [eventTypeId], references: [id], onDelete: Cascade)
+
+  notificationLogs NotificationLog[]
+
+  @@index([userId])
+  @@index([eventTypeId])
+  @@index([trigger])
+  @@index([isActive])
+  @@index([deletedAt])
+  @@map("workflows")
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  FAILED
+  CANCELED
+}
+
+model NotificationLog {
+  id      String             @id @default(uuid()) @db.Uuid
+  status  NotificationStatus @default(PENDING)
+  channel WorkflowChannel
+
+  // Recipient
+  recipient String @db.VarChar(255)
+
+  // Content
+  subject String? @db.VarChar(500)
+  body    String  @db.Text
+
+  // Result
+  sentAt       DateTime? @db.Timestamptz(3)
+  failedAt     DateTime? @db.Timestamptz(3)
+  errorMessage String?   @db.Text
+
+  // Timestamps
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  // Relations
+  workflowId String   @db.Uuid
+  workflow   Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+
+  bookingId String  @db.Uuid
+  booking   Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  @@index([workflowId])
+  @@index([bookingId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("notification_logs")
+}
+
+// ============================================================================
+// WEBHOOKS & INTEGRATIONS
+// ============================================================================
+
+enum WebhookEvent {
+  BOOKING_CREATED
+  BOOKING_UPDATED
+  BOOKING_CANCELED
+  BOOKING_RESCHEDULED
+  INVITEE_CREATED
+  ROUTING_SUBMITTED
+}
+
+model WebhookSubscription {
+  id       String         @id @default(uuid()) @db.Uuid
+  url      String         @db.Text
+  events   WebhookEvent[]
+  secret   String         @db.VarChar(255)
+  isActive Boolean        @default(true)
+
+  // Timestamps
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  // Relations
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  deliveries WebhookDelivery[]
+
+  @@index([organizationId])
+  @@index([isActive])
+  @@index([deletedAt])
+  @@map("webhook_subscriptions")
+}
+
+enum WebhookDeliveryStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  RETRYING
+}
+
+model WebhookDelivery {
+  id     String                @id @default(uuid()) @db.Uuid
+  event  WebhookEvent
+  status WebhookDeliveryStatus @default(PENDING)
+
+  // Request
+  payload Json
+  headers Json?
+
+  // Response
+  statusCode Int?
+  response   String? @db.Text
+
+  // Retry
+  attemptCount Int       @default(0)
+  maxAttempts  Int       @default(3)
+  nextRetryAt  DateTime? @db.Timestamptz(3)
+
+  // Timestamps
+  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime  @updatedAt @db.Timestamptz(3)
+  deliveredAt DateTime? @db.Timestamptz(3)
+
+  // Relations
+  subscriptionId String              @db.Uuid
+  subscription   WebhookSubscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+
+  bookingId String?  @db.Uuid
+  booking   Booking? @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  @@index([subscriptionId])
+  @@index([bookingId])
+  @@index([status])
+  @@index([nextRetryAt])
+  @@index([createdAt])
+  @@map("webhook_deliveries")
+}
+
+// ============================================================================
+// AUDIT & COMPLIANCE
+// ============================================================================
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  LOGIN
+  LOGOUT
+  EXPORT
+  SHARE
+}
+
+model AuditLog {
+  id         String      @id @default(uuid()) @db.Uuid
+  action     AuditAction
+  entityType String      @db.VarChar(100)
+  entityId   String      @db.Uuid
+
+  // Changes
+  oldValues Json?
+  newValues Json?
+
+  // Context
+  ipAddress String? @db.VarChar(45)
+  userAgent String? @db.Text
+
+  // Timestamps
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  // Relations
+  userId String @db.Uuid
+  user   User   @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([organizationId])
+  @@index([entityType, entityId])
+  @@index([action])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+model RetentionPolicy {
+  id            String @id @default(uuid()) @db.Uuid
+  entityType    String @db.VarChar(100)
+  retentionDays Int
+
+  // Timestamps
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  // Relations
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  deletionRequests DeletionRequest[]
+
+  @@unique([organizationId, entityType])
+  @@index([organizationId])
+  @@map("retention_policies")
+}
+
+enum DeletionStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  FAILED
+}
+
+model DeletionRequest {
+  id         String         @id @default(uuid()) @db.Uuid
+  entityType String         @db.VarChar(100)
+  entityId   String         @db.Uuid
+  status     DeletionStatus @default(PENDING)
+
+  // Result
+  deletedAt    DateTime? @db.Timestamptz(3)
+  failedAt     DateTime? @db.Timestamptz(3)
+  errorMessage String?   @db.Text
+
+  // Timestamps
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  // Relations
+  policyId String          @db.Uuid
+  policy   RetentionPolicy @relation(fields: [policyId], references: [id], onDelete: Cascade)
+
+  @@index([policyId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("deletion_requests")
+}
