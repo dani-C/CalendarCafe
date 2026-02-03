@@ -1,6 +1,8 @@
 import { Injectable, OnModuleInit, OnModuleDestroy, Logger } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
 import { ConfigService } from '@nestjs/config';
+import { Pool } from 'pg';
+import { PrismaPg } from '@prisma/adapter-pg';
 
 /**
  * Prisma Service
@@ -17,12 +19,13 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
   private readonly logger = new Logger(PrismaService.name);
 
   constructor(private readonly configService: ConfigService) {
+    // Create PostgreSQL connection pool
+    const connectionString = configService.get<string>('DATABASE_URL');
+    const pool = new Pool({ connectionString });
+    const adapter = new PrismaPg(pool);
+
     super({
-      datasources: {
-        db: {
-          url: configService.get<string>('DATABASE_URL'),
-        },
-      },
+      adapter,
       log:
         configService.get<string>('NODE_ENV') === 'development'
           ? [
@@ -105,7 +108,7 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
       (key) => !key.startsWith('_') && !key.startsWith('$'),
     );
 
-    return this.$transaction(
+    await this.$transaction(
       models.map((model) => (this as any)[model].deleteMany()),
     );
   }

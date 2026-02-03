@@ -8,7 +8,7 @@ export const APP_VERSION = '1.0.0';
 export const APP_DESCRIPTION = 'Scheduling automation platform';
 
 export const API_CONFIG = {
-  BASE_URL: import.meta.env.VITE_API_URL || 'http://localhost:3000/api',
+  BASE_URL: import.meta.env.VITE_API_URL || 'http://localhost:3000/api/v1',
   TIMEOUT: 10000,
   RETRY_ATTEMPTS: 1,
 } as const;
